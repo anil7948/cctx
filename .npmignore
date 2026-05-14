@@ -1,0 +1,10 @@
+src/
+tsconfig.json
+.gitignore
+.cctx/
+.claude/
+.github/
+CONTRIBUTING.md
+SECURITY.md
+*.log
+.DS_Store

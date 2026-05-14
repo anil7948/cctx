@@ -1,0 +1,1 @@
+Reduce Claude Code token usage by 70-90% using a free local LLM (Ollama). MCP server + Stop hook with codebase indexing, tool output compression, and turn summarization.

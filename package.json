@@ -1,0 +1,72 @@
+{
+  "name": "cctx-optimizer",
+  "version": "1.0.0",
+  "description": "Reduce Claude Code token usage by 70-90% using a local LLM. MCP server + Stop hook that compresses tool outputs, summarizes conversation turns, and serves a semantic codebase index — all powered by Ollama running locally.",
+  "license": "MIT",
+  "author": "Anil Nayak",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anil7948/cctx.git"
+  },
+  "homepage": "https://github.com/anil7948/cctx#readme",
+  "bugs": {
+    "url": "https://github.com/anil7948/cctx/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "cctx": "dist/cli/index.js"
+  },
+  "main": "dist/cli/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli/index.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli/index.js",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.3.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "ignore": "^5.3.2",
+    "ora": "^8.1.0",
+    "undici": "^6.20.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.16.0",
+    "typescript": "^5.6.2"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "mcp",
+    "mcp-server",
+    "token-optimization",
+    "context-compression",
+    "ollama",
+    "local-llm",
+    "cost-reduction",
+    "context-window",
+    "token-savings",
+    "ai-tools",
+    "developer-tools",
+    "model-context-protocol",
+    "phi3",
+    "codebase-index",
+    "summarization",
+    "tool-compression",
+    "anthropic",
+    "context-optimizer"
+  ]
+}
