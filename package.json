@@ -1,6 +1,6 @@
 {
   "name": "cctx-optimizer",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Reduce Claude Code token usage by 70-90% using a local LLM. MCP server + Stop hook that compresses tool outputs, summarizes conversation turns, and serves a semantic codebase index — all powered by Ollama running locally.",
   "license": "MIT",
   "author": "Anil Nayak",

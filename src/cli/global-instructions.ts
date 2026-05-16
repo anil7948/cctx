@@ -22,7 +22,7 @@ Call \`get_codebase_context\` to load the project map instead of reading files o
 Call \`get_optimized_context\` to reconstruct compressed history: summarized older turns plus the single most recent verbatim turn. Use this instead of relying on raw conversation history to keep context lean.
 
 ### During tool calls with large output
-When a \`bash\`, \`read_file\`, or \`grep\` result exceeds ~100 lines, call \`compress_tool_result\` before reasoning over it.
+When a \`bash\`, \`read_file\`, or \`grep\` result exceeds ~30 lines, call \`compress_tool_result\` before reasoning over it.
 
 ### At the end of every turn
 Call \`record_turn\` with \`prompt\` (user message) and \`response\` (your full reply). This is the most important step — without it, no session history is stored and token savings are zero.

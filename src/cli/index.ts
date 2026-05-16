@@ -12,12 +12,16 @@ import { configShow, configGet, configSet } from "./config.js";
 import { uninstall } from "./uninstall.js";
 import { runMcpServer } from "../mcp/server.js";
 import { fmt } from "./format.js";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { join, dirname } from "path";
+const { version } = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../package.json"), "utf8"));
 
 const program = new Command();
 program
   .name("cctx")
   .description("Claude Context Optimizer — local-LLM-backed token reduction for Claude Code")
-  .version("0.1.0");
+  .version(version);
 
 program
   .command("setup")

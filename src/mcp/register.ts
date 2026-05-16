@@ -69,7 +69,9 @@ export function registerMcpServer(command: string): void {
 }
 
 export function unregisterMcpServer(): void {
-  const cfg = readClaudeConfigStrict();
+  // Use safe reader: if the config is corrupt at uninstall time there's nothing
+  // meaningful to remove, so return quietly rather than aborting the uninstall.
+  const cfg = readClaudeConfigSafe();
   if (!cfg.mcpServers?.cctx) return;
   delete cfg.mcpServers.cctx;
   writeClaudeConfig(cfg);
