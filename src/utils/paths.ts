@@ -15,7 +15,8 @@ export const paths = {
   daemonPidFile: join(HOME, ".cctx", "daemon.pid"),
   daemonLog: join(HOME, ".cctx", "daemon.log"),
   cctxInstructions: join(HOME, ".cctx", "instructions.md"),
-  claudeCodeConfig: join(HOME, ".claude", "claude_code_config.json"),
+  claudeJson: join(HOME, ".claude.json"),          // Claude Code 2.x user-scope MCP config
+  claudeCodeConfig: join(HOME, ".claude", "claude_code_config.json"), // legacy (1.x), kept for cleanup
   claudeSettings: join(HOME, ".claude", "settings.json"),
   claudeCommandsDir: join(HOME, ".claude", "commands"),
   globalClaudeMd: join(HOME, ".claude", "CLAUDE.md"),

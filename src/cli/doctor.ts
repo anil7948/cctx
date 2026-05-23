@@ -3,7 +3,7 @@ import { daemonStatus } from "../ollama/manager.js";
 import { clientFromConfig } from "../ollama/client.js";
 import { loadConfig } from "../utils/config.js";
 import { isMcpRegistered } from "../mcp/register.js";
-import { isStopHookRegistered } from "./hooks.js";
+import { isStopHookRegistered, isCompressHookRegistered } from "./hooks.js";
 import { isOllamaInstalled } from "../ollama/installer.js";
 import { lastIndexRun, listFileIndex } from "../store/file-index.js";
 import { summarizeTurn } from "../summarizer/engine.js";
@@ -58,11 +58,11 @@ export async function doctor(): Promise<void> {
   checks.push({
     name: "Claude Code MCP",
     ok: isMcpRegistered(),
-    detail: existsSync(paths.claudeCodeConfig)
-      ? isMcpRegistered()
-        ? "registered"
-        : "not registered"
-      : "Claude Code config not found",
+    detail: isMcpRegistered()
+      ? "registered"
+      : existsSync(paths.claudeJson)
+        ? "not registered  →  cctx setup"
+        : "~/.claude.json not found  →  cctx setup",
     fix: "cctx setup",
   });
 
@@ -70,6 +70,17 @@ export async function doctor(): Promise<void> {
     name: "Stop hook",
     ok: isStopHookRegistered(),
     detail: isStopHookRegistered()
+      ? `registered (${paths.claudeSettings})`
+      : existsSync(paths.claudeSettings)
+        ? "not registered"
+        : "~/.claude/settings.json not found",
+    fix: "cctx setup",
+  });
+
+  checks.push({
+    name: "PostToolUse compress hook",
+    ok: isCompressHookRegistered(),
+    detail: isCompressHookRegistered()
       ? `registered (${paths.claudeSettings})`
       : existsSync(paths.claudeSettings)
         ? "not registered"

@@ -11,6 +11,7 @@ import { buildProjectMap } from "../indexer/map-builder.js";
 import { estimateTokens } from "../utils/tokenizer.js";
 import { loadConfig } from "../utils/config.js";
 import { log } from "../utils/logger.js";
+export { compressHook } from "./compress-hook.js";
 
 function formatAge(ms: number): string {
   const seconds = Math.round((Date.now() - ms) / 1000);

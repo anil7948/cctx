@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { runSetup } from "./setup.js";
 import { daemonStart, daemonStop, daemonStatusCmd, daemonRestart } from "./daemon.js";
 import { modelList, modelSet, modelPull, modelRemove } from "./model.js";
-import { sessionList, sessionStats, sessionFlush, sessionExport, hookStop } from "./session.js";
+import { sessionList, sessionStats, sessionFlush, sessionExport, hookStop, compressHook } from "./session.js";
 import { indexRun, indexStatus, indexWatch } from "./index-cmd.js";
 import { injectClaudeMd } from "./inject.js";
 import { registerGlobalInstructions } from "./global-instructions.js";
@@ -80,6 +80,13 @@ sessionCmd
   .description("Called by Claude Code Stop hook — reads stdin JSON, records last turn to DB")
   .action(async () => {
     await hookStop();
+  });
+
+sessionCmd
+  .command("compress-hook")
+  .description("Called by Claude Code PostToolUse hook — reads stdin JSON, compresses large tool output, writes updatedToolOutput JSON to stdout")
+  .action(async () => {
+    await compressHook();
   });
 
 sessionCmd

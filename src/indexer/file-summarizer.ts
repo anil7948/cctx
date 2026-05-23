@@ -52,6 +52,7 @@ async function summarizeChunk(
   model: string,
   filePath: string,
   chunk: string,
+  numGpu: number,
 ): Promise<FileSummary> {
   const generate = (prompt: string) =>
     client.generate({
@@ -61,6 +62,7 @@ async function summarizeChunk(
       temperature: 0.1,
       format: "json",
       numCtx: 16384,
+      numGpu,
       timeoutMs: 90_000,
     });
 
@@ -82,7 +84,7 @@ export async function summarizeFile(filePath: string, content: string): Promise<
 
   const partials: FileSummary[] = [];
   for (const chunk of chunks) {
-    const summary = await summarizeChunk(client, cfg.model.active, filePath, chunk);
+    const summary = await summarizeChunk(client, cfg.model.active, filePath, chunk, cfg.hardware.numGpu);
     partials.push(summary);
   }
 

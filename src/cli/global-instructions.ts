@@ -11,27 +11,39 @@ const GLOBAL_CLAUDE_MD = join(HOME, ".claude", "CLAUDE.md");
 const BEGIN = "<!-- cctx:instructions:begin -->";
 const END = "<!-- cctx:instructions:end -->";
 
-const CONTENT = `## cctx — Context Optimizer Instructions
+const CONTENT = `## cctx — Context Optimizer
 
-You have access to the \`cctx\` MCP server. Use these tools to reduce token usage:
+You have access to the \`cctx\` MCP server. These tools are MANDATORY, not optional.
 
-### At the start of the first turn in a session
-Call \`get_codebase_context\` to load the project map instead of reading files one by one.
+---
 
-### At the start of each subsequent turn
-Call \`get_optimized_context\` to reconstruct compressed history: summarized older turns plus the single most recent verbatim turn. Use this instead of relying on raw conversation history to keep context lean.
+### REQUIRED: Session start
 
-### During tool calls with large output
-When a \`bash\`, \`read_file\`, or \`grep\` result exceeds ~30 lines, call \`compress_tool_result\` before reasoning over it.
+**Before your first response in any session**, call \`cctx\` → \`get_codebase_context\`. This replaces reading files one by one. Do not skip this even if you think you know the project.
 
-### At the end of every turn
-Call \`record_turn\` with \`prompt\` (user message) and \`response\` (your full reply). This is the most important step — without it, no session history is stored and token savings are zero.
+---
 
-### To force compaction mid-session
-Use \`/compact-local\` or call \`flush_session\` then \`get_optimized_context\`.
+### REQUIRED: Every turn end
 
-### Switching tasks
-Call \`new_session\` when switching to an unrelated task in the same Claude Code window, so summaries from one task don't bleed into the next.
+**The last thing you do before finishing any response** is call \`cctx\` → \`record_turn\` with:
+- \`prompt\`: the user's message
+- \`response\`: your full reply
+
+This is non-negotiable. A turn without \`record_turn\` is incomplete. Token savings are zero without it.
+
+---
+
+### REQUIRED: Large tool output
+
+When any \`bash\`, \`read_file\`, or \`grep\` result exceeds ~100 lines, call \`cctx\` → \`compress_tool_result\` on the raw output before reasoning over it.
+
+**Note:** A PostToolUse hook automatically compresses outputs >30 lines before they reach you. You will see a \`[cctx: ...]\` header on compressed results. No manual action needed for those — only call \`compress_tool_result\` manually if the hook did not fire or the output is still too large.
+
+---
+
+### On demand: Force compaction
+
+Use \`/compact-local\` inside Claude Code, or call \`flush_session\` then \`get_optimized_context\`.
 `;
 
 export function registerGlobalInstructions(): void {

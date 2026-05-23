@@ -84,9 +84,39 @@ CREATE TABLE IF NOT EXISTS session_stats (
   layer2_savings INTEGER NOT NULL DEFAULT 0,
   layer3_savings INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS project_knowledge (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  key            TEXT NOT NULL UNIQUE,
+  fact           TEXT NOT NULL,
+  category       TEXT NOT NULL CHECK(category IN ('decision','pattern','bug','open_question','context')),
+  source_session TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  importance     INTEGER NOT NULL DEFAULT 3
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_knowledge_importance
+  ON project_knowledge(importance DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS session_knowledge (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      TEXT NOT NULL,
+  key             TEXT NOT NULL,
+  fact            TEXT NOT NULL,
+  category        TEXT NOT NULL CHECK(category IN ('decision','pattern','bug','open_question','context')),
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  source_turn_ids TEXT NOT NULL DEFAULT '[]',
+  UNIQUE(session_id, key),
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_knowledge_session
+  ON session_knowledge(session_id);
 `;
 
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 
 const connections = new Map<string, SqliteDb>();
 
@@ -105,8 +135,43 @@ export function getDb(cwd: string = process.cwd()): SqliteDb {
   const versionRow = db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version: number } | undefined;
   if (!versionRow) {
     db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(CURRENT_VERSION);
+  } else if (versionRow.version < CURRENT_VERSION) {
+    db.transaction(() => {
+      if (versionRow.version < 2) {
+        // Migration v1 → v2: add project_knowledge and session_knowledge tables.
+        // IF NOT EXISTS guards make this safe even if SCHEMA already ran on a fresh DB.
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS project_knowledge (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            key            TEXT NOT NULL UNIQUE,
+            fact           TEXT NOT NULL,
+            category       TEXT NOT NULL CHECK(category IN ('decision','pattern','bug','open_question','context')),
+            source_session TEXT NOT NULL,
+            created_at     INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL,
+            importance     INTEGER NOT NULL DEFAULT 3
+          );
+          CREATE INDEX IF NOT EXISTS idx_project_knowledge_importance
+            ON project_knowledge(importance DESC, updated_at DESC);
+          CREATE TABLE IF NOT EXISTS session_knowledge (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id      TEXT NOT NULL,
+            key             TEXT NOT NULL,
+            fact            TEXT NOT NULL,
+            category        TEXT NOT NULL CHECK(category IN ('decision','pattern','bug','open_question','context')),
+            created_at      INTEGER NOT NULL,
+            updated_at      INTEGER NOT NULL,
+            source_turn_ids TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(session_id, key),
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_session_knowledge_session
+            ON session_knowledge(session_id);
+        `);
+        db.prepare("UPDATE schema_version SET version = 2").run();
+      }
+    })();
   }
-  // Future migrations would compare versionRow.version to CURRENT_VERSION here.
 
   connections.set(path, db);
   return db;

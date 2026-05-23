@@ -37,6 +37,28 @@ export interface CctxConfig {
     mcpRegistered: boolean;
     slashCommandInstalled: boolean;
   };
+  hardware: {
+    /** Number of GPU layers for all Ollama inference calls.
+     *  -1 = all available GPU layers (Metal on macOS, CUDA/ROCm on Linux — auto-detected by Ollama).
+     *   0 = force CPU only (useful on headless servers without GPU).
+     *  Ollama auto-detects GPU when this option is omitted; -1 makes it explicit. */
+    numGpu: number;
+    /** Number of files to process in parallel during `cctx index run`.
+     *  Higher values speed up indexing on GPU at the cost of more memory.
+     *  Default: 4 */
+    indexingConcurrency: number;
+  };
+  memory: {
+    /** Master kill switch for cross-session memory and session consolidation.
+     *  Set to false to disable all LLM extraction calls beyond turn summarization. */
+    enabled: boolean;
+    /** Maximum project_knowledge entries to keep across sessions (LRU prune). Default: 20 */
+    maxProjectKnowledge: number;
+    /** Hard cap on session_knowledge rows per session. ADDs beyond this are skipped. Default: 30 */
+    maxSessionKnowledge: number;
+    /** Skip session consolidation until the session has at least N summarized turns. Default: 2 */
+    consolidationMinTurns: number;
+  };
 }
 
 export const DEFAULT_CONFIG: CctxConfig = {
@@ -89,6 +111,16 @@ export const DEFAULT_CONFIG: CctxConfig = {
   claudeCode: {
     mcpRegistered: false,
     slashCommandInstalled: false,
+  },
+  hardware: {
+    numGpu: -1,
+    indexingConcurrency: 4,
+  },
+  memory: {
+    enabled: true,
+    maxProjectKnowledge: 20,
+    maxSessionKnowledge: 30,
+    consolidationMinTurns: 2,
   },
 };
 

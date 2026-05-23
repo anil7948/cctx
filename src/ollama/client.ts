@@ -8,6 +8,7 @@ export interface GenerateOptions {
   temperature?: number;
   format?: "json";
   numCtx?: number;
+  numGpu?: number;   // -1 = all available GPU layers, 0 = CPU only; Ollama auto-detects if omitted
   timeoutMs?: number;
 }
 
@@ -86,6 +87,7 @@ export class OllamaClient {
           options: {
             temperature: opts.temperature ?? 0.2,
             num_ctx: opts.numCtx ?? 4096,
+            ...(opts.numGpu !== undefined && { num_gpu: opts.numGpu }),
           },
         }),
         signal: ac.signal,

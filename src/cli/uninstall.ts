@@ -2,7 +2,7 @@ import { existsSync, rmSync } from "node:fs";
 import { stopDaemon } from "../ollama/manager.js";
 import { unregisterMcpServer } from "../mcp/register.js";
 import { unregisterGlobalInstructions } from "./global-instructions.js";
-import { unregisterStopHook } from "./hooks.js";
+import { unregisterStopHook, unregisterCompressHook } from "./hooks.js";
 import { paths } from "../utils/paths.js";
 import { fmt } from "./format.js";
 
@@ -11,6 +11,7 @@ export async function uninstall(opts: { keepModels?: boolean }): Promise<void> {
   unregisterMcpServer();
   unregisterGlobalInstructions();
   unregisterStopHook();
+  unregisterCompressHook();
 
   const toRemove: string[] = [
     paths.bin,

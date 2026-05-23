@@ -6,6 +6,7 @@ import { log } from "../utils/logger.js";
 interface HookEntry {
   type: string;
   command: string;
+  timeout?: number;
 }
 
 interface HookGroup {
@@ -22,6 +23,7 @@ interface ClaudeSettings {
 }
 
 const CCTX_HOOK_MARKER = "cctx session hook-stop";
+const CCTX_COMPRESS_HOOK_MARKER = "cctx session compress-hook";
 
 function readSettings(): ClaudeSettings {
   if (!existsSync(paths.claudeSettings)) return {};
@@ -37,6 +39,60 @@ function readSettings(): ClaudeSettings {
 function writeSettings(cfg: ClaudeSettings): void {
   mkdirSync(dirname(paths.claudeSettings), { recursive: true });
   writeFileSync(paths.claudeSettings, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+}
+
+export function registerCompressHook(cctxBinaryPath: string): void {
+  const cfg = readSettings();
+  cfg.hooks = cfg.hooks ?? {};
+
+  const newEntry: HookEntry = {
+    type: "command",
+    command: `${cctxBinaryPath} session compress-hook`,
+  };
+
+  const existing: HookGroup[] = cfg.hooks.PostToolUse ?? [];
+  const filtered = existing
+    .map((group) => ({
+      ...group,
+      hooks: group.hooks.filter((h) => !h.command.includes(CCTX_COMPRESS_HOOK_MARKER)),
+    }))
+    .filter((group) => group.hooks.length > 0);
+
+  filtered.push({ matcher: "Bash|Read|Grep|Glob", hooks: [{ ...newEntry, timeout: 30 }] });
+  cfg.hooks.PostToolUse = filtered;
+
+  writeSettings(cfg);
+  log.info(`PostToolUse compress hook registered in ${paths.claudeSettings}`);
+}
+
+export function unregisterCompressHook(): void {
+  if (!existsSync(paths.claudeSettings)) return;
+  const cfg = readSettings();
+  if (!cfg.hooks?.PostToolUse) return;
+
+  const filtered = (cfg.hooks.PostToolUse as HookGroup[])
+    .map((group) => ({
+      ...group,
+      hooks: group.hooks.filter((h) => !h.command.includes(CCTX_COMPRESS_HOOK_MARKER)),
+    }))
+    .filter((group) => group.hooks.length > 0);
+
+  if (filtered.length === 0) {
+    delete cfg.hooks.PostToolUse;
+  } else {
+    cfg.hooks.PostToolUse = filtered;
+  }
+
+  writeSettings(cfg);
+}
+
+export function isCompressHookRegistered(): boolean {
+  if (!existsSync(paths.claudeSettings)) return false;
+  const cfg = readSettings();
+  const postToolUse = (cfg.hooks?.PostToolUse ?? []) as HookGroup[];
+  return postToolUse.some((group) =>
+    group.hooks.some((h) => h.command.includes(CCTX_COMPRESS_HOOK_MARKER)),
+  );
 }
 
 export function registerStopHook(cctxBinaryPath: string): void {

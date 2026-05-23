@@ -3,8 +3,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { tools, dispatchTool } from "./tools/index.js";
 import { log } from "../utils/logger.js";
+import { migrateCurrentProject } from "../cli/migrate.js";
 
 export async function runMcpServer(): Promise<void> {
+  // Ensure the current project's DB is migrated to the latest schema before
+  // handling any tool calls. This is the safety net for cases where postinstall
+  // was skipped (manual binary copy, CI environments, etc.).
+  migrateCurrentProject(process.cwd());
   const server = new Server(
     { name: "cctx", version: "0.1.0" },
     { capabilities: { tools: {} } },

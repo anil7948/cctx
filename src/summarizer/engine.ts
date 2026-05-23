@@ -49,6 +49,7 @@ export async function summarizeTurn(prompt: string, response: string): Promise<S
         temperature: a.temperature,
         format: a.format,
         numCtx: 8192,
+        numGpu: cfg.hardware.numGpu,
         timeoutMs: 60_000,
       });
       const parsed = extractFirstJsonObject(result.response);

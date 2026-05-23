@@ -6,7 +6,7 @@ import { clientFromConfig } from "../ollama/client.js";
 import { loadConfig, saveGlobalConfig } from "../utils/config.js";
 import { registerMcpServer, installSlashCommand } from "../mcp/register.js";
 import { registerGlobalInstructions } from "./global-instructions.js";
-import { registerStopHook } from "./hooks.js";
+import { registerStopHook, registerCompressHook } from "./hooks.js";
 import { runIndex } from "../indexer/runner.js";
 import { summarizeTurn } from "../summarizer/engine.js";
 import { fmt, formatBytes } from "./format.js";
@@ -90,18 +90,23 @@ export async function runSetup(opts: { model?: string; yes?: boolean }): Promise
   installSlashCommand();
   cfg.claudeCode.mcpRegistered = true;
   cfg.claudeCode.slashCommandInstalled = true;
-  console.log(fmt.ok(`Registered MCP server in Claude Code config (${paths.claudeCodeConfig})`));
+  console.log(fmt.ok(`Registered MCP server in Claude Code config (${paths.claudeJson})`));
 
   saveGlobalConfig(cfg);
 
-  // Step 5: Register Stop hook — this wires cctx into Claude Code's Stop event
-  // so sessions are recorded automatically. Failure here is non-fatal: it should
-  // warn and continue rather than abort before the index and smoke test.
+  // Step 5: Register hooks — Stop (session recording) and PostToolUse (compression).
+  // Failure here is non-fatal: warn and continue rather than abort.
   try {
     registerStopHook(which());
     console.log(fmt.ok(`Registered Stop hook in ${paths.claudeSettings}`));
   } catch (e) {
     console.log(fmt.warn(`Stop hook registration failed: ${(e as Error).message} — run cctx setup to retry`));
+  }
+  try {
+    registerCompressHook(which());
+    console.log(fmt.ok(`Registered PostToolUse compress hook in ${paths.claudeSettings}`));
+  } catch (e) {
+    console.log(fmt.warn(`PostToolUse hook registration failed: ${(e as Error).message} — run cctx setup to retry`));
   }
 
   // Step 6: Register global instructions
@@ -156,7 +161,7 @@ export async function runSetup(opts: { model?: string; yes?: boolean }): Promise
   console.log("  2. Start coding — cctx runs automatically");
   console.log(`  3. Run ${fmt.bold("cctx session stats")} after your first session`);
   console.log(bar);
-  if (!existsSync(paths.claudeCodeConfig)) {
+  if (!existsSync(paths.claudeJson)) {
     console.log(fmt.warn("Claude Code does not appear to be installed — MCP registration written but inactive."));
   }
 }
