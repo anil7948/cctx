@@ -5,6 +5,7 @@ import type { TurnRow } from "../store/turns.js";
 import { loadConfig } from "../utils/config.js";
 import { listSessionKnowledge } from "../store/session-knowledge.js";
 import type { SessionKnowledgeRow } from "../store/session-knowledge.js";
+import { getLatestCheckpoint } from "../store/session-checkpoints.js";
 
 function verbatimWindow(turnCount: number, configured: "auto" | number): number {
   if (configured !== "auto") return configured;
@@ -45,6 +46,8 @@ export interface OptimizedContext {
   text: string;
   verbatimTurns: number;
   summarizedTurns: number;
+  /** Estimated context utilization as a fraction 0–1. Based on char count / (maxTokens * 4). */
+  utilizationPct: number;
 }
 
 export function assembleOptimizedContext(sessionId: string, cwd: string = process.cwd()): OptimizedContext {
@@ -76,6 +79,19 @@ export function assembleOptimizedContext(sessionId: string, cwd: string = proces
   }
 
   const sections: string[] = [];
+
+  // Inject previous session checkpoint at session start (turns 0–2) if one exists
+  if (turns.length <= 2) {
+    try {
+      const checkpoint = getLatestCheckpoint(cwd);
+      if (checkpoint) {
+        sections.push(`## Previous Session Checkpoint\n\n${checkpoint.notesMd}`);
+      }
+    } catch {
+      // Non-fatal — checkpoint is a helpful hint, not required
+    }
+  }
+
   // Session knowledge goes first — it is the single source of truth for decisions
   if (hasKnowledge) {
     sections.push(renderSessionKnowledge(sessionKnowledge));
@@ -87,9 +103,15 @@ export function assembleOptimizedContext(sessionId: string, cwd: string = proces
     sections.push(`## Recent turns (verbatim)\n\n${verbatimPart.join("\n\n")}`);
   }
 
+  const text = sections.join("\n\n");
+  // Estimate utilization: 4 chars ≈ 1 token (rough but consistent)
+  const estimatedTokens = Math.ceil(text.length / 4);
+  const utilizationPct = Math.min(1, estimatedTokens / (cfg.context.maxTokens || 180000));
+
   return {
-    text: sections.join("\n\n"),
+    text,
     verbatimTurns: verbatimPart.length,
     summarizedTurns: summarizedPart.length,
+    utilizationPct,
   };
 }

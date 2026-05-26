@@ -1,92 +1,96 @@
 import { ensureDaemon } from "../ollama/manager.js";
 import { loadConfig } from "../utils/config.js";
 import { extractFirstJsonObject } from "../summarizer/json-extract.js";
-import { FILE_INDEX_SYSTEM, buildFileIndexPrompt } from "./prompt.js";
+import { FILE_INDEX_SYSTEM } from "./prompt.js";
 import { chunkFile } from "./chunker.js";
+import { extractStructural } from "./structural-extract.js";
 import type { FileSummary } from "../store/file-index.js";
 
-function coerce(raw: unknown): FileSummary {
-  if (!raw || typeof raw !== "object") throw new Error("File summary is not an object");
+// SAFETY: structural fields (exports, key_imports, side_effects) are extracted
+// deterministically by a regex pass in structural-extract.ts. The LLM is only
+// asked for `purpose` and `notes` — advisory prose where hallucination is
+// tolerable. A previous version asked the LLM for every field and it
+// confidently invented exports that didn't exist, then those fabricated
+// summaries were served to Claude via the cache-hit path of the Read
+// compressor. Do not move structural extraction back into the LLM.
+
+function coerceProse(raw: unknown): { purpose: string; notes: string } {
+  if (!raw || typeof raw !== "object") return { purpose: "", notes: "" };
   const o = raw as Record<string, unknown>;
-  // Provide sensible defaults for missing fields — small models like phi3.5 sometimes omit fields
   return {
-    purpose: String(o.purpose ?? "").trim() || "unknown purpose",
-    exports: Array.isArray(o.exports) ? o.exports.map(String).filter(Boolean) : [],
-    key_imports: Array.isArray(o.key_imports) ? o.key_imports.map(String).filter(Boolean) : [],
-    side_effects: Array.isArray(o.side_effects) ? o.side_effects.map(String).filter(Boolean) : [],
-    notes: String(o.notes ?? "").trim() || "none",
+    purpose: String(o.purpose ?? "").trim(),
+    notes: String(o.notes ?? "").trim(),
   };
 }
 
-function mergeChunkSummaries(chunks: FileSummary[]): FileSummary {
-  const exports = new Set<string>();
-  const imports = new Set<string>();
-  const sideEffects = new Set<string>();
-  const notes: string[] = [];
-  const purposes: string[] = [];
-  for (const c of chunks) {
-    if (c.purpose) purposes.push(c.purpose);
-    for (const e of c.exports) exports.add(e);
-    for (const i of c.key_imports) imports.add(i);
-    for (const s of c.side_effects) sideEffects.add(s);
-    if (c.notes) notes.push(c.notes);
-  }
-  return {
-    purpose: purposes[0] ?? "",
-    exports: [...exports],
-    key_imports: [...imports],
-    side_effects: [...sideEffects],
-    notes: notes.join(" "),
-  };
+function buildProsePrompt(filePath: string, chunk: string): string {
+  // First 60 lines is enough to characterize the file. Sending less to the
+  // model means less it can get wrong.
+  const head = chunk.split("\n").slice(0, 60).join("\n");
+  return (
+    `Summarize this source file in two short fields.\n` +
+    `File: ${filePath}\n` +
+    "```\n" +
+    head +
+    "\n```\n" +
+    `Respond ONLY with JSON: ` +
+    `{"purpose":"one short sentence describing what the file does",` +
+    `"notes":"one short sentence about any non-obvious decisions, or empty string"}`
+  );
 }
 
-function buildMinimalPrompt(filePath: string, chunk: string): string {
-  // Take only the first 40 lines — enough to see package, imports, and top-level declarations.
-  // Used as a fallback when the full chunk causes the model to truncate its JSON output.
-  const head = chunk.split("\n").slice(0, 40).join("\n");
-  return `Summarize this file header. File: ${filePath}\n\`\`\`\n${head}\n\`\`\`\nRespond ONLY with JSON: {"purpose":"one sentence","exports":["..."],"key_imports":["..."],"side_effects":[],"notes":"none"}`;
-}
-
-async function summarizeChunk(
+async function summarizeProse(
   client: Awaited<ReturnType<typeof ensureDaemon>>,
   model: string,
   filePath: string,
   chunk: string,
   numGpu: number,
-): Promise<FileSummary> {
-  const generate = (prompt: string) =>
-    client.generate({
+): Promise<{ purpose: string; notes: string }> {
+  try {
+    const result = await client.generate({
       model,
-      prompt,
+      prompt: buildProsePrompt(filePath, chunk),
       system: FILE_INDEX_SYSTEM,
       temperature: 0.1,
       format: "json",
-      numCtx: 16384,
+      numCtx: 8192,
       numGpu,
-      timeoutMs: 90_000,
+      timeoutMs: 45_000,
     });
-
-  // First attempt with full chunk
-  try {
-    const result = await generate(buildFileIndexPrompt(filePath, chunk));
-    return coerce(extractFirstJsonObject(result.response));
+    return coerceProse(extractFirstJsonObject(result.response));
   } catch {
-    // Retry with only the file header — far fewer input tokens, much less chance of truncation
-    const result = await generate(buildMinimalPrompt(filePath, chunk));
-    return coerce(extractFirstJsonObject(result.response));
+    return { purpose: "", notes: "" };
   }
 }
 
 export async function summarizeFile(filePath: string, content: string): Promise<FileSummary> {
   const cfg = loadConfig();
-  const client = await ensureDaemon();
-  const chunks = chunkFile(content);
 
-  const partials: FileSummary[] = [];
-  for (const chunk of chunks) {
-    const summary = await summarizeChunk(client, cfg.model.active, filePath, chunk, cfg.hardware.numGpu);
-    partials.push(summary);
+  // Structural fields — deterministic, guaranteed accurate.
+  const structural = extractStructural(filePath, content);
+
+  // Prose fields — best-effort LLM. If the daemon is down or the model times
+  // out we just return empty prose; the structural data is still useful.
+  let prose = { purpose: "", notes: "" };
+  try {
+    const client = await ensureDaemon();
+    const chunks = chunkFile(content);
+    prose = await summarizeProse(
+      client,
+      cfg.model.active,
+      filePath,
+      chunks[0] ?? content,
+      cfg.hardware.numGpu,
+    );
+  } catch {
+    // proceed with structural-only summary
   }
 
-  return partials.length === 1 ? partials[0]! : mergeChunkSummaries(partials);
+  return {
+    purpose: prose.purpose || "(no LLM summary available)",
+    exports: structural.exports,
+    key_imports: structural.key_imports,
+    side_effects: structural.side_effects,
+    notes: prose.notes,
+  };
 }

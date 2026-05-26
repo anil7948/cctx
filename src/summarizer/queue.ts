@@ -9,6 +9,7 @@ import { listProjectKnowledge, upsertProjectKnowledge, pruneProjectKnowledge } f
 import type { KnowledgeEntry } from "../store/project-knowledge.js";
 import { extractProjectKnowledge } from "../memory/knowledge-extractor.js";
 import { consolidateSessionKnowledge } from "../memory/session-consolidator.js";
+import { buildCheckpoint } from "../memory/checkpoint-builder.js";
 
 // ── Summarization queue ───────────────────────────────────────────────────────
 // One in-flight summarization per session, processed serially. Concurrency
@@ -111,4 +112,8 @@ export async function flushSession(sessionId: string, cwd: string = process.cwd(
     log.warn(`Project knowledge extraction failed: ${(e as Error).message}`);
     // Non-fatal — flush itself succeeded (turn summarizations are done)
   }
+
+  // Step 3: build session checkpoint from session_knowledge + last summary
+  // Stored in session_checkpoints; injected at start of next session.
+  await buildCheckpoint(sessionId, cwd);
 }

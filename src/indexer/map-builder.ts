@@ -1,4 +1,4 @@
-import { listFileIndex, lastIndexRun } from "../store/file-index.js";
+import { listFileIndex, searchFileIndex, lastIndexRun } from "../store/file-index.js";
 import { listProjectKnowledge } from "../store/project-knowledge.js";
 import type { KnowledgeRow } from "../store/project-knowledge.js";
 import { basename, dirname } from "node:path";
@@ -121,6 +121,67 @@ export function buildProjectMapPage(
     : "";
 
   return { text: parts.join("\n") + pageSuffix, page: pageNum, totalPages, totalFiles };
+}
+
+/** Build a focused map for a specific query using FTS5 search.
+ *  Returns only the files most relevant to the query — no pagination needed. */
+export function buildProjectMapForQuery(
+  query: string,
+  cwd: string = process.cwd(),
+): { text: string; matchedFiles: number; totalFiles: number } {
+  const allFiles = listFileIndex(cwd);
+  const totalFiles = allFiles.length;
+  const projectName = basename(cwd);
+
+  if (totalFiles === 0) {
+    return {
+      text: `=== Project: ${projectName} (no index yet — run \`cctx index run\`) ===`,
+      matchedFiles: 0,
+      totalFiles: 0,
+    };
+  }
+
+  const matches = searchFileIndex(query, cwd, 20);
+  if (matches.length === 0) {
+    return {
+      text: `=== Project: ${projectName} — no files matched "${query}" ===\n\nCall get_codebase_context() without a query to browse the full index.`,
+      matchedFiles: 0,
+      totalFiles,
+    };
+  }
+
+  const lines: string[] = [
+    `=== Project: ${projectName} — files matching "${query}" (${matches.length} of ${totalFiles}) ===`,
+    "",
+  ];
+  for (const f of matches) {
+    const s = f.parsed;
+    const entry: string[] = [f.file_path];
+    if (s.purpose) entry.push(`  ${s.purpose}`);
+    if (s.exports.length) entry.push(`  Exports: ${s.exports.join(", ")}`);
+    if (s.side_effects.length) entry.push(`  Side effects: ${s.side_effects.join("; ")}`);
+    if (s.notes) entry.push(`  Notes: ${s.notes}`);
+    lines.push(entry.join("\n"));
+  }
+  lines.push("");
+  lines.push("To read any file in full, just ask — Claude Code will fetch it on demand.");
+
+  // Append project memory if any
+  const knowledge = listProjectKnowledge(cwd);
+  if (knowledge.length > 0) {
+    const byCategory = new Map<string, KnowledgeRow[]>();
+    for (const k of knowledge) {
+      if (!byCategory.has(k.category)) byCategory.set(k.category, []);
+      byCategory.get(k.category)!.push(k);
+    }
+    lines.push("\n## Project Memory (cross-session)\n");
+    for (const [cat, entries] of byCategory) {
+      lines.push(`### ${cat}`);
+      for (const e of entries) lines.push(`- [${e.key}] ${e.fact}`);
+    }
+  }
+
+  return { text: lines.join("\n"), matchedFiles: matches.length, totalFiles };
 }
 
 export function buildProjectMap(cwd: string = process.cwd()): string {

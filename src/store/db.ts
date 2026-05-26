@@ -114,9 +114,21 @@ CREATE TABLE IF NOT EXISTS session_knowledge (
 
 CREATE INDEX IF NOT EXISTS idx_session_knowledge_session
   ON session_knowledge(session_id);
+
+CREATE TABLE IF NOT EXISTS session_checkpoints (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  notes_md     TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_project
+  ON session_checkpoints(project_path, created_at DESC);
 `;
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 4;
 
 const connections = new Map<string, SqliteDb>();
 
@@ -169,6 +181,65 @@ export function getDb(cwd: string = process.cwd()): SqliteDb {
             ON session_knowledge(session_id);
         `);
         db.prepare("UPDATE schema_version SET version = 2").run();
+      }
+      if (versionRow.version < 3) {
+        // Migration v2 → v3: invalidate all existing file_index rows.
+        //
+        // Prior versions of the indexer asked a small local LLM to extract
+        // exports/imports/side_effects from each file. The model frequently
+        // hallucinated entries (imports listed as exports, internal helpers
+        // listed as exports). Those wrong summaries were then served via
+        // the Read compressor's cache-hit path, so Claude would see invented
+        // file APIs and route edits incorrectly.
+        //
+        // v3 ships with a deterministic structural extractor. To stop
+        // serving stale hallucinated rows we wipe file_index on upgrade —
+        // the next `cctx index run` will repopulate with correct data.
+        // Truncating is safe: the table is a derived cache, not source of
+        // truth.
+        db.exec("DELETE FROM file_index;");
+        db.prepare("UPDATE schema_version SET version = 3").run();
+      }
+      if (versionRow.version < 4) {
+        // Migration v3 → v4: add session_checkpoints table and FTS5 index on file_index.
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS session_checkpoints (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id   TEXT NOT NULL,
+            project_path TEXT NOT NULL,
+            notes_md     TEXT NOT NULL,
+            created_at   INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_checkpoints_project
+            ON session_checkpoints(project_path, created_at DESC);
+        `);
+        // FTS5 content table referencing file_index rows.
+        // We use a content table (not a shadow table) so we control inserts/deletes.
+        // On migration, populate from whatever rows are currently in file_index.
+        db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS file_index_fts USING fts5(
+            file_path UNINDEXED,
+            purpose,
+            exports,
+            notes,
+            content='',
+            tokenize='unicode61'
+          );
+        `);
+        // Populate FTS from any existing file_index rows (may be empty after v3 truncation)
+        const existing = db.prepare("SELECT id, file_path, summary_json FROM file_index").all() as Array<{id: number; file_path: string; summary_json: string}>;
+        const ftsInsert = db.prepare("INSERT INTO file_index_fts(rowid, file_path, purpose, exports, notes) VALUES (?, ?, ?, ?, ?)");
+        const populateFts = db.transaction(() => {
+          for (const row of existing) {
+            try {
+              const s = JSON.parse(row.summary_json) as { purpose?: string; exports?: string[]; notes?: string };
+              ftsInsert.run(row.id, row.file_path, s.purpose ?? "", Array.isArray(s.exports) ? s.exports.join(" ") : "", s.notes ?? "");
+            } catch { /* skip malformed rows */ }
+          }
+        });
+        populateFts();
+        db.prepare("UPDATE schema_version SET version = 4").run();
       }
     })();
   }

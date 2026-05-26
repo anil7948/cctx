@@ -1,8 +1,13 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { paths, projectConfigPath, ensureCctxDirs, ensureProjectDirs } from "./paths.js";
 
+export const CONFIG_SCHEMA_VERSION = 3;
+
 export interface CctxConfig {
-  version: 2;
+  /** Schema version of the persisted config. Bumped when defaults change in a
+   *  way that requires migrating existing user configs. See migrateConfig() for
+   *  the per-version migration steps. */
+  version: number;
   ollama: {
     binaryPath: string;
     port: number;
@@ -16,6 +21,13 @@ export interface CctxConfig {
     verbatimTurnsWindow: "auto" | number;
     maxSummaryTokens: number;
     summarizationPrompt: "default" | string;
+    /** Estimated maximum context tokens for the Claude model in use.
+     *  Used to calculate utilization % in get_optimized_context.
+     *  Default: 180000 (Claude Sonnet 4.x / Opus 4.x context window) */
+    maxTokens: number;
+    /** Warn when estimated context utilization exceeds this fraction (0–1).
+     *  Default: 0.75 (warn at 75% full) */
+    compactWarningThreshold: number;
   };
   codebaseIndex: {
     enabled: boolean;
@@ -62,7 +74,7 @@ export interface CctxConfig {
 }
 
 export const DEFAULT_CONFIG: CctxConfig = {
-  version: 2,
+  version: CONFIG_SCHEMA_VERSION,
   ollama: {
     binaryPath: paths.ollamaBinary,
     port: 11435,
@@ -76,6 +88,8 @@ export const DEFAULT_CONFIG: CctxConfig = {
     verbatimTurnsWindow: 1,
     maxSummaryTokens: 2000,
     summarizationPrompt: "default",
+    maxTokens: 180000,
+    compactWarningThreshold: 0.75,
   },
   codebaseIndex: {
     enabled: true,
@@ -102,8 +116,13 @@ export const DEFAULT_CONFIG: CctxConfig = {
   },
   toolCompression: {
     enabled: true,
-    alwaysRaw: ["*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"],
-    bashMaxOutputLines: 30,
+    alwaysRaw: [
+      "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js",
+      // Schema/structured-data files: corruption of column or index names
+      // here is high-impact and hard to spot. Always serve raw.
+      "*.sql", "*.prisma", "*.graphql", "*.proto",
+    ],
+    bashMaxOutputLines: 120,
     grepMaxMatches: 50,
     fileMinLinesForLLMSummary: 50,
     compressionPrompt: "default",
@@ -139,6 +158,61 @@ function deepMerge<T>(base: T, override: Partial<T>): T {
   return out as T;
 }
 
+/**
+ * Migrate a persisted user config from an older schema version to the current one.
+ *
+ * Runs automatically on every loadConfig() call when paths.globalConfig.version < CONFIG_SCHEMA_VERSION.
+ * Each migration step is idempotent and additive: we replace values the old release
+ * shipped as defaults (which are now known to be wrong/too aggressive) and merge in
+ * new entries the user can't reasonably know to add (e.g. .sql in alwaysRaw).
+ *
+ * IMPORTANT: only overwrite a field when it still matches the old default. If the
+ * user has tuned it deliberately, leave it alone. The whole point of this function
+ * is to fix users who never touched their config; we must not stomp users who did.
+ *
+ * Returns the migrated config plus a `changed` flag so the caller can persist it.
+ */
+function migrateConfig(persisted: Record<string, unknown>): { migrated: Record<string, unknown>; changed: boolean } {
+  const fromVersion = typeof persisted.version === "number" ? persisted.version : 0;
+  if (fromVersion >= CONFIG_SCHEMA_VERSION) return { migrated: persisted, changed: false };
+
+  // Shallow-clone top level + the nested blocks we may touch.
+  const out: Record<string, unknown> = { ...persisted };
+  const tc = { ...((out.toolCompression as Record<string, unknown>) ?? {}) };
+  let touched = false;
+
+  // v2 → v3:
+  //  - bashMaxOutputLines: old default 30 was too aggressive; clipped legitimate
+  //    code/config reads. New default is 120. Bump only if the persisted value
+  //    still matches the old default (= user never tuned it).
+  //  - alwaysRaw: add schema-shaped extensions (.sql, .prisma, .graphql, .proto)
+  //    if they're missing. These were never compressible safely; the previous
+  //    release just didn't list them.
+  //  - fileMinLinesForLLMSummary: defunct setting (file:llm path removed) but
+  //    leave it in place to avoid spurious diffs.
+  if (fromVersion < 3) {
+    if (tc.bashMaxOutputLines === 30) {
+      tc.bashMaxOutputLines = 120;
+      touched = true;
+    }
+    const ar = Array.isArray(tc.alwaysRaw) ? [...(tc.alwaysRaw as string[])] : [];
+    const newEntries = ["*.sql", "*.prisma", "*.graphql", "*.proto"];
+    let arChanged = false;
+    for (const entry of newEntries) {
+      if (!ar.includes(entry)) { ar.push(entry); arChanged = true; }
+    }
+    if (arChanged) {
+      tc.alwaysRaw = ar;
+      touched = true;
+    }
+  }
+
+  if (touched) out.toolCompression = tc;
+  out.version = CONFIG_SCHEMA_VERSION;
+  // version bump alone is also a change to persist — keeps subsequent loads fast.
+  return { migrated: out, changed: true };
+}
+
 function stripEphemeralFields(raw: Record<string, unknown>): Record<string, unknown> {
   if (raw.codebaseIndex && typeof raw.codebaseIndex === "object") {
     const ci = { ...(raw.codebaseIndex as Record<string, unknown>) };
@@ -152,7 +226,25 @@ export function loadConfig(cwd: string = process.cwd()): CctxConfig {
   let cfg = DEFAULT_CONFIG;
   if (existsSync(paths.globalConfig)) {
     try {
-      const raw = stripEphemeralFields(JSON.parse(readFileSync(paths.globalConfig, "utf8")));
+      const persisted = JSON.parse(readFileSync(paths.globalConfig, "utf8")) as Record<string, unknown>;
+
+      // Auto-migrate stale defaults from older releases. Runs once per upgrade:
+      // after the migrated config is written back, fromVersion === CONFIG_SCHEMA_VERSION
+      // on subsequent loads and the migration is a no-op. We do this BEFORE
+      // stripEphemeralFields so the migration sees what the user actually persisted.
+      const { migrated, changed } = migrateConfig(persisted);
+      if (changed) {
+        try {
+          ensureCctxDirs();
+          writeFileSync(paths.globalConfig, JSON.stringify(migrated, null, 2) + "\n", "utf8");
+        } catch {
+          // If we can't write back (read-only FS, permissions, etc.) the in-memory
+          // migrated values still take effect for this process. The migration will
+          // re-run next launch — still safe because the steps are idempotent.
+        }
+      }
+
+      const raw = stripEphemeralFields(migrated);
       cfg = deepMerge(cfg, raw);
     } catch {
       // Corrupt global config — fall back to defaults rather than crashing.

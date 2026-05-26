@@ -19,11 +19,36 @@ Claude Code's context window fills up fast. Every `bash` run, every file read, e
 
 | Layer | Problem | What cctx does | Typical savings |
 |---|---|---|---|
-| **1 — Codebase index** | Session start reads 15–25 files | Pre-built semantic file map served via MCP | ~90% on session start |
-| **2 — Tool output compression** | `bash`/`read_file`/`grep` output appended raw | Rules-based compression + local LLM for unpredictable content | ~70% on agentic loops |
-| **3 — Turn summarization** | History bloats over 10+ turns | Async structured JSON summary of each completed turn | ~83% on long sessions |
+| **1 — Codebase index** | Session start reads 15–25 files | Pre-built semantic file map served via MCP; query by topic to get only relevant files | ~90% on session start |
+| **2 — Tool output compression** | `bash`/`read_file`/`grep` output appended raw | PostToolUse hook: rules-based + local LLM compression, auto-registered on setup | ~70% on agentic loops |
+| **3 — Turn summarization** | History bloats over 10+ turns | Async structured JSON summary of each completed turn; session consolidation maintains current-truth decisions | ~83% on long sessions |
+| **4 — Cross-session memory** | Context resets every session | Key decisions and patterns extracted at flush; injected into every future session automatically | Avoids re-explaining project state |
 
-All three layers are automatic after `cctx setup`. You never call any tools yourself.
+All four layers are automatic after `cctx setup`. You never call any tools yourself.
+
+---
+
+## What's new in v1.2.0
+
+| Feature | What it does |
+|---------|-------------|
+| **FTS5 keyword search** | `get_codebase_context(query: "auth")` returns only relevant files — no paging through 186 files |
+| **Context utilization monitor** | `get_optimized_context` reports % full; warns at 75% to compact before quality degrades |
+| **Session checkpoints** | At flush, cctx synthesizes a "pick up where you left off" note injected at next session start |
+| **Deterministic structural extraction** | File exports/imports now parsed by regex, not LLM — eliminates hallucinated APIs in context |
+| **Safe compression guards** | Identifier-preservation guard blocks compression that drops or invents code symbols |
+| **Zero-touch MCP upgrade** | `npm install -g cctx-optimizer` re-registers MCP server automatically — no `cctx setup` needed |
+
+## What's new in v1.1.0
+
+| Feature | What it does |
+|---------|-------------|
+| **Cross-session memory** | Facts extracted at flush stored in `project_knowledge`; persisted into every future `get_codebase_context` |
+| **Session consolidation** | Per-turn ADD/UPDATE/NOOP distillation into `session_knowledge`; context always reflects current-truth decisions |
+| **PostToolUse compress hook** | Auto-registered hook compresses `bash`/`read_file`/`grep` at 60–70% before output enters context |
+| **Paginated codebase index** | 80K chars/page — no truncation on 100+ file projects |
+| **Parallel indexer** | Configurable concurrency (default 4 files); large projects go from hours to minutes |
+| **GPU acceleration** | Explicit `num_gpu` passthrough to all Ollama calls; auto-detects Metal/CUDA |
 
 ---
 
@@ -98,7 +123,7 @@ The wizard runs eight steps and prints progress for each:
 1. **Download Ollama** — fetches a managed binary to `~/.cctx/bin/`, isolated from any system Ollama you already have
 2. **Start daemon** — launches Ollama on port `11435`
 3. **Pull model** — downloads `phi3.5` (~2.2 GB — this is the slow step, runs once)
-4. **Register MCP server** — writes to `~/.claude/claude_code_config.json`
+4. **Register MCP server** — writes to `~/.claude.json` (Claude Code 2.x); automatically refreshed on every `npm install -g` upgrade — no manual re-registration needed
 5. **Register Stop hook** — writes to `~/.claude/settings.json` to record sessions on exit
 6. **Write tool instructions** — writes `~/.cctx/instructions.md` and registers it via `~/.claude/CLAUDE.md`
 7. **Index project** — builds the initial semantic map of your current project
@@ -355,7 +380,7 @@ npm run typecheck # type check only
 
 ---
 
-<!-- keywords: reduce claude tokens, claude code context window full, save claude api cost, mcp server for claude code, claude code slow large projects, ollama mcp, local llm context compression -->
+<!-- keywords: reduce claude tokens, claude code context window full, save claude api cost, mcp server for claude code, claude code slow large projects, ollama mcp, local llm context compression, cross-session memory, session consolidation, posttooluse hook, context utilization monitor, session checkpoint, phi3.5 ollama, reduce claude code costs, gpu accelerated indexing, claude code 2.x mcp, zero-touch upgrade, codebase semantic index, fts5 search, claude token optimization -->
 
 ## License
 

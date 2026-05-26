@@ -26,6 +26,11 @@ export function upsertFileIndex(args: {
   summary: FileSummary;
 }, cwd: string = process.cwd()): void {
   const db = getDb(cwd);
+  // Upsert the main row and get its rowid for FTS sync
+  const existing = db.prepare(
+    `SELECT id FROM file_index WHERE project_path = ? AND file_path = ?`
+  ).get(projectRoot(cwd), args.filePath) as { id: number } | undefined;
+
   db.prepare(
     `INSERT INTO file_index (project_path, file_path, file_mtime, file_size, summary_json, indexed_at)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -42,6 +47,64 @@ export function upsertFileIndex(args: {
     JSON.stringify(args.summary),
     Date.now(),
   );
+
+  // Keep FTS5 index in sync — delete old row (if any), insert new
+  try {
+    const newRow = db.prepare(
+      `SELECT id FROM file_index WHERE project_path = ? AND file_path = ?`
+    ).get(projectRoot(cwd), args.filePath) as { id: number } | undefined;
+    if (!newRow) return;
+    if (existing) {
+      db.prepare(`DELETE FROM file_index_fts WHERE rowid = ?`).run(existing.id);
+    }
+    db.prepare(
+      `INSERT INTO file_index_fts(rowid, file_path, purpose, exports, notes) VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      newRow.id,
+      args.filePath,
+      args.summary.purpose ?? "",
+      Array.isArray(args.summary.exports) ? args.summary.exports.join(" ") : "",
+      args.summary.notes ?? "",
+    );
+  } catch {
+    // FTS sync failure is non-fatal — search degrades gracefully to full scan
+  }
+}
+
+/** Search the file index using FTS5 BM25 keyword matching.
+ *  Returns rows ordered by relevance (best match first).
+ *  Falls back to a LIKE-based scan if FTS5 is unavailable. */
+export function searchFileIndex(
+  query: string,
+  cwd: string = process.cwd(),
+  limit = 20,
+): Array<FileIndexRow & { parsed: FileSummary }> {
+  const db = getDb(cwd);
+  const root = projectRoot(cwd);
+  try {
+    // FTS5 path: BM25-ranked results
+    const rows = db.prepare(`
+      SELECT fi.*
+      FROM file_index fi
+      JOIN file_index_fts fts ON fts.rowid = fi.id
+      WHERE file_index_fts MATCH ?
+        AND fi.project_path = ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(query, root, limit) as FileIndexRow[];
+    return rows.map((r) => ({ ...r, parsed: JSON.parse(r.summary_json) as FileSummary }));
+  } catch {
+    // FTS table missing (old DB not yet migrated) — fall back to LIKE scan
+    const like = `%${query.replace(/[%_]/g, "\\$&")}%`;
+    const rows = db.prepare(`
+      SELECT * FROM file_index
+      WHERE project_path = ?
+        AND (file_path LIKE ? ESCAPE '\\' OR summary_json LIKE ? ESCAPE '\\')
+      ORDER BY file_path ASC
+      LIMIT ?
+    `).all(root, like, like, limit) as FileIndexRow[];
+    return rows.map((r) => ({ ...r, parsed: JSON.parse(r.summary_json) as FileSummary }));
+  }
 }
 
 export function getFileIndex(filePath: string, cwd: string = process.cwd()): (FileIndexRow & { parsed: FileSummary }) | null {

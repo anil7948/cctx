@@ -17,11 +17,20 @@ export const getOptimizedContext: ToolDef = {
     const cfg = loadConfig();
     const sessionId = (args.session_id as string | undefined) ?? getOrCreateActiveSession(cfg.model.active).id;
     const ctx = assembleOptimizedContext(sessionId);
+    const threshold = cfg.context.compactWarningThreshold ?? 0.75;
+    const pct = Math.round(ctx.utilizationPct * 100);
+
+    let contextText = ctx.text;
+    if (ctx.utilizationPct >= threshold) {
+      contextText += `\n\n⚠️ Context is ~${pct}% full. Run /compact-local or \`cctx session flush\` to compress history before continuing.`;
+    }
+
     return {
       session_id: sessionId,
       summarized_turns: ctx.summarizedTurns,
       verbatim_turns: ctx.verbatimTurns,
-      context: ctx.text,
+      utilization_pct: pct,
+      context: contextText,
     };
   },
 };

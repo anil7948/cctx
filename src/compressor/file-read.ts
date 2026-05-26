@@ -3,19 +3,27 @@ import { resolve } from "node:path";
 import { loadConfig } from "../utils/config.js";
 import { getFileIndex, type FileSummary } from "../store/file-index.js";
 import { projectRoot } from "../utils/paths.js";
-import { ensureDaemon } from "../ollama/manager.js";
-import { TOOL_COMPRESS_SYSTEM, buildToolCompressPrompt } from "./prompt.js";
 import type { CompressionInput } from "./types.js";
 
+// SAFETY: this module never sends source code to an LLM. The cache-hit path
+// renders a deterministic summary built by the indexer; otherwise we pass the
+// raw file through untouched. A previous version sent unindexed files to a
+// small local model for "compression" and the model hallucinated invalid code
+// that then replaced the real file in Claude's context window. Do not bring
+// that path back without a way to guarantee identifier preservation.
+
+const SUMMARY_BANNER =
+  "[cctx: cached index summary — NOT the file body. " +
+  "If you need the file contents, re-read with a different path, " +
+  "or add the path to toolCompression.alwaysRaw in ~/.cctx/config.json.]";
+
 function renderCachedSummary(filePath: string, s: FileSummary): string {
-  const parts: string[] = [`# ${filePath} (cached summary)`];
+  const parts: string[] = [SUMMARY_BANNER, "", `# ${filePath} (cached summary)`];
   if (s.purpose) parts.push(`Purpose: ${s.purpose}`);
   if (s.exports.length) parts.push(`Exports: ${s.exports.join(", ")}`);
   if (s.key_imports.length) parts.push(`Imports: ${s.key_imports.join(", ")}`);
   if (s.side_effects.length) parts.push(`Side effects: ${s.side_effects.join("; ")}`);
   if (s.notes) parts.push(`Notes: ${s.notes}`);
-  parts.push("");
-  parts.push("(File summarized from index; ask to read the full file if you need its body.)");
   return parts.join("\n");
 }
 
@@ -49,8 +57,10 @@ export async function compressFileRead(
     return { text: input.rawOutput, strategy: "file:small-passthrough" };
   }
 
-  // Cache-hit path: if the file is in our index and the on-disk mtime+size
-  // match what we indexed, we know the cached summary is current.
+  // Cache-hit path: only return the deterministic summary when the on-disk
+  // mtime+size match what the indexer recorded. Otherwise pass raw — never
+  // synthesize content. The mtime check uses Math.floor to match what
+  // walker.ts stores (Math.floor(stat.mtimeMs)).
   if (filePath) {
     const indexed = getFileIndex(filePath, cwd);
     if (indexed) {
@@ -63,20 +73,11 @@ export async function compressFileRead(
             return { text: renderCachedSummary(filePath, indexed.parsed), strategy: "file:cache-hit" };
           }
         } catch {
-          // fall through to LLM
+          // fall through to raw
         }
       }
     }
   }
 
-  const client = await ensureDaemon();
-  const result = await client.generate({
-    model: cfg.model.active,
-    prompt: buildToolCompressPrompt(filePath ?? "file_read", input.rawOutput),
-    system: TOOL_COMPRESS_SYSTEM,
-    temperature: 0.1,
-    numCtx: 8192,
-    timeoutMs: 45_000,
-  });
-  return { text: result.response.trim(), strategy: "file:llm" };
+  return { text: input.rawOutput, strategy: "file:raw" };
 }

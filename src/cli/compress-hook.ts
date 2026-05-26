@@ -19,19 +19,100 @@ const TOOL_TYPE_MAP: Record<string, ToolType> = {
   Glob: "list_dir",
 };
 
-const MIN_LINES = 30;
+// Per-tool minimum line counts before we attempt compression. Read carries the
+// highest semantic density per line — corrupting a Read substitutes wrong code
+// into the model context — so we set a much higher floor. Bash/Grep/Glob are
+// log-shaped and tolerate aggressive truncation.
+const MIN_LINES_BY_TOOL: Record<ToolType, number> = {
+  bash: 30,
+  grep: 30,
+  list_dir: 30,
+  read_file: 200,
+  test_runner: 30,
+  web: 30,
+  unknown: Number.POSITIVE_INFINITY,
+};
+
+// Allowed strategies per tool. Read MUST only use strategies that cannot
+// hallucinate — cache-hit (deterministic summary), always-raw, small/raw
+// passthrough. The LLM-rewrite strategy "file:llm" has been removed from
+// the compressor, but we belt-and-suspenders refuse it here too.
+const ALLOWED_STRATEGIES_BY_TOOL: Record<ToolType, RegExp | null> = {
+  bash: null, // any deterministic strategy is fine
+  grep: null,
+  list_dir: null,
+  read_file: /^file:(always-raw|small-passthrough|cache-hit|raw)$/,
+  test_runner: null,
+  web: null,
+  unknown: /^never$/,
+};
+
+/**
+ * Identifier-preservation guard for source-code-like outputs.
+ *
+ * If the compressed text drops too many identifiers (>40%) or invents
+ * identifiers that weren't in the raw, we refuse to substitute. A
+ * deterministic strategy that does this is a bug; an LLM strategy that
+ * does this is a hallucination. Either way the safe answer is "don't
+ * replace the user's source code with our guess."
+ *
+ * Returns true if the substitution is safe.
+ */
+function passesIdentifierGuard(raw: string, compressed: string): boolean {
+  // Cheap check: only run on code-shaped content. If the raw output is mostly
+  // log lines we skip the guard — log compression is allowed to drop lines.
+  const looksLikeCode = /\b(import|export|function|class|def|func|package)\b/.test(raw);
+  if (!looksLikeCode) return true;
+
+  const idRe = /\b[A-Za-z_$][\w$]{2,}\b/g;
+  const rawIds = new Set(raw.match(idRe) ?? []);
+  const compIds = new Set(compressed.match(idRe) ?? []);
+  if (rawIds.size === 0) return true;
+
+  // Invented identifier check: anything in compressed that wasn't in raw is
+  // suspicious. Common keywords are filtered out below; allow up to 3 stray
+  // tokens (e.g. cctx banner words) before refusing.
+  const invented: string[] = [];
+  for (const id of compIds) {
+    if (!rawIds.has(id) && !COMMON_TOKENS.has(id)) invented.push(id);
+  }
+  if (invented.length > 3) return false;
+
+  // Drop-rate check: compressed output should retain at least 60% of the
+  // raw's identifiers. Cache-hit summaries legitimately drop more, but they
+  // declare themselves "file:cache-hit" and are exempt elsewhere; this
+  // guard is a backstop.
+  let retained = 0;
+  for (const id of rawIds) if (compIds.has(id)) retained++;
+  const retentionRatio = retained / rawIds.size;
+  if (retentionRatio < 0.6) return false;
+
+  return true;
+}
+
+// Common tokens that appear in cctx headers/markers and shouldn't count
+// against the "invented identifier" check.
+const COMMON_TOKENS = new Set([
+  "cctx", "saved", "tokens", "summary", "cached", "index", "NOT", "the", "file",
+  "body", "Purpose", "Exports", "Imports", "Side", "effects", "Notes",
+  "toolCompression", "alwaysRaw", "config", "json",
+  "truncated", "lines", "passthrough",
+]);
+
+const MIN_LINES_FALLBACK = 30;
 
 /**
  * PostToolUse hook handler — `cctx session compress-hook`
  *
  * Claude Code pipes the PostToolUse JSON payload to stdin. This handler:
  *   1. Extracts the tool output text from tool_response
- *   2. Skips if output is ≤ MIN_LINES
+ *   2. Skips if output is ≤ per-tool MIN_LINES threshold
  *   3. Compresses with the existing compressor pipeline
- *   4. Writes hookSpecificOutput.updatedToolOutput JSON to stdout
+ *   4. For Read: rejects unsafe strategies and runs an identifier-drop guard
+ *   5. Writes hookSpecificOutput.updatedToolOutput JSON to stdout
  *
- * Claude Code substitutes the compressed text for the raw tool output
- * BEFORE it enters the model's context window — genuine context token reduction.
+ * Claude Code substitutes the compressed text for the raw tool output BEFORE
+ * it enters the model's context window — genuine context token reduction.
  *
  * Exits silently (no stdout) on any error or when no tokens are saved, so
  * Claude Code always falls back to using the original output.
@@ -52,7 +133,8 @@ export async function compressHook(): Promise<void> {
   if (toolType === "unknown") process.exit(0);
 
   const toolContent = extractText(toolName, payload.tool_response);
-  if (!toolContent || toolContent.split("\n").length <= MIN_LINES) process.exit(0);
+  const minLines = MIN_LINES_BY_TOOL[toolType] ?? MIN_LINES_FALLBACK;
+  if (!toolContent || toolContent.split("\n").length <= minLines) process.exit(0);
 
   const toolInput = (payload.tool_input ?? {}) as Record<string, unknown>;
   const command = typeof toolInput.command === "string" ? toolInput.command : undefined;
@@ -62,6 +144,20 @@ export async function compressHook(): Promise<void> {
   try {
     result = await compress({ toolType, rawOutput: toolContent, command, filePath });
   } catch {
+    process.exit(0);
+  }
+
+  // Strategy allowlist — refuse to substitute Read output with anything other
+  // than known-safe strategies. Belt-and-suspenders against future regressions
+  // that might wire an LLM-driven strategy back into the file-read path.
+  const allowed = ALLOWED_STRATEGIES_BY_TOOL[toolType];
+  if (allowed && !allowed.test(result.strategy)) process.exit(0);
+
+  // Identifier-preservation guard — block substitutions that drop or invent
+  // too many identifiers relative to the raw output. Cache-hit summaries
+  // declare themselves and are exempt (they intentionally don't contain the
+  // file body).
+  if (result.strategy !== "file:cache-hit" && !passesIdentifierGuard(toolContent, result.compressed)) {
     process.exit(0);
   }
 

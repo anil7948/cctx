@@ -1,7 +1,7 @@
 {
   "name": "cctx-optimizer",
-  "version": "1.1.0",
-  "description": "Reduce Claude Code token usage by 70-90% using a local LLM. MCP server + Stop hook that compresses tool outputs, summarizes conversation turns, and serves a semantic codebase index — all powered by Ollama running locally.",
+  "version": "1.2.0",
+  "description": "Reduce Claude Code token usage by 70-90% with cross-session memory and four-layer optimization: semantic codebase indexing, PostToolUse tool compression, turn summarization, and session consolidation. MCP server powered by Ollama — zero API calls, runs entirely on your machine.",
   "license": "MIT",
   "author": "Anil Nayak",
   "repository": {
@@ -68,6 +68,16 @@
     "summarization",
     "tool-compression",
     "anthropic",
-    "context-optimizer"
+    "context-optimizer",
+    "cross-session-memory",
+    "session-consolidation",
+    "gpu-acceleration",
+    "claude-optimization",
+    "reduce-tokens",
+    "project-knowledge",
+    "mcp-hooks",
+    "zero-configuration",
+    "context-management",
+    "productivity"
   ]
 }
